@@ -1,0 +1,44 @@
+# Datos de MySQL (contienen información sensible y son específicos del entorno)
+data/mysql/
+
+# Logs (se generan automáticamente y pueden contener información sensible)
+logs/
+
+# Sitios web específicos del usuario (contenido personalizado)
+sites/*/
+
+# Configuraciones específicas de sitios (generadas automáticamente)
+config/nginx/sites/*.conf
+!config/nginx/sites/phpmyadmin.local.conf
+config/apache/*.conf
+!config/apache/site-template.conf
+
+# Archivos temporales de Docker
+.env
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+
+# Archivos de editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Archivos de respaldo
+*.bak
+*.backup
+*.orig
+
+# Archivos de log específicos
+*.log
+
+# Archivos temporales de PHP
+*.tmp
+*.temp
+
+# Variables de entorno locales
+.env.local
+.env.*.local

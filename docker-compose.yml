@@ -1,0 +1,98 @@
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: web-manager-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./config/nginx:/etc/nginx/conf.d
+      - ./sites:/var/www/html
+      - ./logs/nginx:/var/log/nginx
+    depends_on:
+      - apache
+    networks:
+      - webnet
+    restart: unless-stopped
+
+  apache:
+    image: php:8.2-apache
+    container_name: web-manager-apache
+    volumes:
+      - ./sites:/var/www/html
+      - ./config/apache:/etc/apache2/sites-available
+      - ./logs/apache:/var/log/apache2
+    environment:
+      - APACHE_DOCUMENT_ROOT=/var/www/html
+    networks:
+      - webnet
+    restart: unless-stopped
+    command: >
+      bash -c "a2enmod rewrite &&
+               a2enmod headers &&
+               a2enmod ssl &&
+               a2enmod proxy &&
+               a2enmod proxy_fcgi &&
+               apache2-foreground"
+
+  php-fpm:
+    image: php:8.2-fpm
+    container_name: web-manager-php-fpm
+    volumes:
+      - ./sites:/var/www/html
+    networks:
+      - webnet
+    restart: unless-stopped
+    command: >
+      bash -c "docker-php-ext-install mysqli pdo pdo_mysql &&
+               php-fpm"
+
+  mysql:
+    image: mysql:8.0
+    container_name: mysql_server
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./data/mysql:/var/lib/mysql
+      - ./init:/docker-entrypoint-initdb.d
+    networks:
+      - webnet
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin:latest
+    container_name: phpmyadmin
+    restart: always
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      PMA_ARBITRARY: 0
+      HIDE_PHP_VERSION: 1
+      PMA_ABSOLUTE_URI: http://phpmyadmin.local/
+      PMA_CONTROLHOST: mysql
+      PMA_CONTROLPORT: 3306
+      PMA_PMADB: ''
+      PMA_CONTROLUSER: ''
+      PMA_CONTROLPASS: ''
+      UPLOAD_LIMIT: 300M
+      MEMORY_LIMIT: 512M
+      SESSION_COOKIE_SECURE: false
+      SESSION_COOKIE_SAMESITE: Strict
+    ports:
+      - "8306:80"
+    volumes:
+      - ./config/phpmyadmin/config.user.inc.php:/etc/phpmyadmin/config.user.inc.php:ro
+    depends_on:
+      - mysql
+    networks:
+      - webnet
+
+networks:
+  webnet:
+    driver: bridge
+
+volumes:
+  sites_data:
+  config_data:
