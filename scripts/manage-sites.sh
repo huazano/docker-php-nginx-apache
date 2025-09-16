@@ -21,7 +21,7 @@ NC='\033[0m' # No Color
 # Función para mostrar ayuda
 show_help() {
     echo -e "${BLUE}Web Manager - Gestor de Sitios Web${NC}"
-    echo -e "Uso: $0 [comando] [dominio]"
+    echo -e "Uso: $0 [comando] [dominio] [opciones]"
     echo ""
     echo "Comandos disponibles:"
     echo -e "  ${GREEN}update${NC}     - Actualiza todas las configuraciones basándose en carpetas en sites/"
@@ -30,9 +30,14 @@ show_help() {
     echo -e "  ${GREEN}list${NC}       - Lista todos los sitios configurados"
     echo -e "  ${GREEN}restart${NC}    - Reinicia los servicios Docker"
     echo ""
+    echo "Opciones para 'add':"
+    echo -e "  ${YELLOW}--wordpress${NC} - Instala WordPress automáticamente en el sitio"
+    echo -e "  ${YELLOW}--copy-from SITIO${NC} - Crea enlaces simbólicos de plugins desde otro sitio"
+    echo ""
     echo "Ejemplos:"
     echo "  $0 update"
     echo "  $0 add ejemplo.com"
+    echo "  $0 add ejemplo.com --wordpress"
     echo "  $0 remove ejemplo.com"
 }
 
@@ -74,13 +79,17 @@ generate_apache_config() {
 # Función para crear estructura de sitio
 create_site_structure() {
     local domain=$1
+    local install_wordpress=$2
     local site_dir="$SITES_DIR/$domain"
     
     if [[ ! -d "$site_dir" ]]; then
         mkdir -p "$site_dir"
         
-        # Crear archivo index.php de ejemplo
-        cat > "$site_dir/index.php" << EOF
+        if [[ "$install_wordpress" == "true" ]]; then
+            install_wordpress_site "$domain" "$site_dir"
+        else
+            # Crear archivo index.php de ejemplo
+            cat > "$site_dir/index.php" << EOF
 <?php
 echo "<h1>Bienvenido a $domain</h1>";
 echo "<p>Este sitio está funcionando correctamente.</p>";
@@ -89,8 +98,98 @@ echo "<p>Fecha: " . date('Y-m-d H:i:s') . "</p>";
 phpinfo();
 ?>
 EOF
+        fi
         
         echo -e "${GREEN}✓${NC} Estructura de sitio creada: $site_dir"
+    fi
+}
+
+# Función para instalar WordPress en un sitio
+install_wordpress_site() {
+    local domain=$1
+    local site_dir=$2
+    local wordpress_zip="$PROJECT_DIR/wordpress.zip"
+    
+    if [[ ! -f "$wordpress_zip" ]]; then
+        echo -e "${RED}Error: No se encontró el archivo WordPress en: $wordpress_zip${NC}"
+        return 1
+    fi
+    
+    echo -e "${YELLOW}Instalando WordPress en $domain...${NC}"
+    
+    # Descomprimir WordPress en el directorio del sitio
+    cd "$site_dir"
+    unzip -q "$wordpress_zip"
+    
+    # Mover archivos de WordPress desde la carpeta wordpress/ al directorio raíz del sitio
+    if [[ -d "wordpress" ]]; then
+        mv wordpress/* .
+        mv wordpress/.[^.]* . 2>/dev/null || true  # Mover archivos ocultos si existen
+        rmdir wordpress
+        
+        # Limpiar plugins y temas no deseados de WordPress (ANTES de cambiar permisos)
+        echo -e "${YELLOW}Limpiando plugins y temas innecesarios...${NC}"
+        
+        # Eliminar plugins no deseados
+        rm -rf "$site_dir/wp-content/plugins/akismet" 2>/dev/null || true
+        rm -f "$site_dir/wp-content/plugins/hello.php" 2>/dev/null || true
+        
+        # Eliminar temas no deseados
+        rm -rf "$site_dir/wp-content/themes/twentytwentyfour" 2>/dev/null || true
+        rm -rf "$site_dir/wp-content/themes/twentytwentythree" 2>/dev/null || true
+        
+        echo -e "${GREEN}✓${NC} Plugins y temas innecesarios eliminados"
+        
+        # Crear .htaccess para WordPress
+        cat > "$site_dir/.htaccess" << 'EOF'
+# BEGIN WordPress
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+RewriteBase /
+RewriteRule ^index\.php$ - [L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule . /index.php [L]
+</IfModule>
+# END WordPress
+EOF
+        
+        # Establecer permisos correctos para WordPress
+        echo -e "${YELLOW}Configurando permisos para Docker (www-data)...${NC}"
+        
+        # Cambiar propietario a www-data (33:33) para que PHP pueda escribir
+        sudo chown -R 33:33 "$site_dir"
+        
+        # Establecer permisos: directorios 755, archivos 644
+        find "$site_dir" -type d -exec chmod 755 {} \;
+        find "$site_dir" -type f -exec chmod 644 {} \;
+        
+        # wp-content necesita permisos de escritura adicionales
+        chmod 775 "$site_dir/wp-content"
+        chmod 775 "$site_dir/wp-content/themes" 2>/dev/null || true
+        chmod 775 "$site_dir/wp-content/plugins" 2>/dev/null || true
+        chmod 775 "$site_dir/wp-content/uploads" 2>/dev/null || true
+        
+        # Crear directorio uploads si no existe
+        mkdir -p "$site_dir/wp-content/uploads"
+        chmod 775 "$site_dir/wp-content/uploads"
+        chown 33:33 "$site_dir/wp-content/uploads"
+        
+        # Enlazar plugin bahez desde wgp.wp.local
+        local base_site="$SITES_DIR/wgp.wp.local"
+        if [[ -d "$base_site/wp-content/plugins/bahez" ]]; then
+            echo -e "${YELLOW}Enlazando plugin bahez desde wgp.wp.local...${NC}"
+            sudo ln -sf "../../../wgp.wp.local/wp-content/plugins/bahez" "$site_dir/wp-content/plugins/bahez"
+            echo -e "${GREEN}✓${NC} Plugin bahez enlazado simbólicamente"
+        fi
+        
+        echo -e "${GREEN}✓${NC} WordPress instalado en $domain"
+        echo -e "${GREEN}✓${NC} .htaccess creado automáticamente"
+        echo -e "${GREEN}✓${NC} Permisos configurados para Docker (www-data)"
+    else
+        echo -e "${RED}Error: No se pudo descomprimir WordPress correctamente${NC}"
+        return 1
     fi
 }
 
@@ -127,6 +226,22 @@ update_all_sites() {
 # Función para añadir un nuevo sitio
 add_site() {
     local domain=$1
+    local install_wordpress="false"
+    
+    # Verificar opciones adicionales
+    shift
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --wordpress)
+                install_wordpress="true"
+                shift
+                ;;
+            *)
+                echo -e "${RED}Error: Opción desconocida: $1${NC}"
+                return 1
+                ;;
+        esac
+    done
     
     if [[ -z "$domain" ]]; then
         echo -e "${RED}Error: Debe especificar un dominio${NC}"
@@ -134,8 +249,11 @@ add_site() {
     fi
     
     echo -e "${BLUE}Añadiendo sitio: $domain${NC}"
+    if [[ "$install_wordpress" == "true" ]]; then
+        echo -e "${BLUE}Con instalación de WordPress${NC}"
+    fi
     
-    create_site_structure "$domain"
+    create_site_structure "$domain" "$install_wordpress"
     generate_nginx_config "$domain"
     generate_apache_config "$domain"
     
@@ -145,6 +263,9 @@ add_site() {
     docker exec web-manager-apache service apache2 reload > /dev/null 2>&1
     
     echo -e "${GREEN}✓ Sitio $domain añadido correctamente${NC}"
+    if [[ "$install_wordpress" == "true" ]]; then
+        echo -e "${GREEN}✓ WordPress instalado en $domain${NC}"
+    fi
     echo -e "${YELLOW}Recuerda reiniciar los servicios con: $0 restart${NC}"
 }
 
@@ -228,7 +349,8 @@ case "$1" in
         update_all_sites
         ;;
     "add")
-        add_site "$2"
+        shift
+        add_site "$@"
         ;;
     "remove")
         remove_site "$2"

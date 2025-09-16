@@ -33,6 +33,8 @@ services:
                a2enmod ssl &&
                a2enmod proxy &&
                a2enmod proxy_fcgi &&
+               a2dissite 000-default || true &&
+               a2ensite 000-default &&
                apache2-foreground"
 
   php-fpm:
@@ -92,6 +94,7 @@ services:
 networks:
   webnet:
     driver: bridge
+    name: webnet
 
 volumes:
   sites_data:
